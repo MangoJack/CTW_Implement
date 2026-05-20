@@ -1,0 +1,82 @@
+{
+  "description": "CTW classification test fixtures — realistic Chinese/English test data",
+  "fixtures": {
+    "bilibili_mcp_video": {
+      "url": "https://www.bilibili.com/video/BV1xx411c7mD",
+      "title": "Claude Code 最强 MCP 插件推荐！效率翻倍",
+      "description": "B站视频介绍 Claude Code 的 MCP 插件，涵盖安装、配置和使用技巧。展示如何通过 MCP 插件扩展 Claude Code 的功能，包括文件操作、浏览器控制等。",
+      "content": "今天给大家推荐几个 Claude Code 的 MCP 插件... 首先是 filesystem MCP，它可以让 Claude 直接操作文件系统... 安装步骤很简单，先 npm install... 配置完后重启 Claude Code 就能用了...",
+      "source_type": "video"
+    },
+    "github_prefect": {
+      "url": "https://github.com/PrefectHQ/prefect",
+      "title": "Prefect - Python workflow orchestration",
+      "description": "GitHub 仓库：Prefect 是一个 Python 工作流编排框架，用于构建、运行和监控数据管道。源码包括核心引擎、任务调度、状态管理、UI 仪表盘等模块。",
+      "content": "Prefect is a workflow orchestration tool. Core architecture: Flow → Task → State. The engine uses Dask for distributed execution. Key modules: prefect.engine, prefect.tasks, prefect.schedules. Design patterns: Task-based DAG, State machine for lifecycle management, Plugin system for extensibility.",
+      "source_type": "repo"
+    },
+    "pdf_paper": {
+      "url": "https://arxiv.org/abs/1706.03762",
+      "title": "Attention Is All You Need",
+      "description": "Google 团队的 Transformer 架构论文。提出完全基于注意力机制的序列转导模型，在机器翻译任务上达到 SOTA。引入了 Multi-Head Attention 和 Positional Encoding 等关键创新。",
+      "content": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks... We propose a new simple network architecture, the Transformer, based solely on attention mechanisms... Experiments on two machine translation tasks show the Transformer is superior in quality while being more parallelizable...",
+      "source_type": "pdf"
+    },
+    "security_cve": {
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2024-3094",
+      "title": "CVE-2024-3094: XZ Utils Backdoor Supply Chain Attack",
+      "description": "Critical CVE 漏洞通告。XZ Utils 5.6.0/5.6.1 被植入后门，影响 liblzma 库，可绕过 sshd 认证。CVSS 评分 10.0 CRITICAL。",
+      "content": "CVE-2024-3094 is a critical supply chain vulnerability in XZ Utils versions 5.6.0 and 5.6.1. A malicious backdoor was discovered in the liblzma library that could allow remote code execution... The backdoor interferes with sshd authentication... Affected systems: x86-64 Linux with glibc, specifically Debian/RPM based distributions...",
+      "source_type": "url"
+    },
+    "n8n_tutorial": {
+      "url": "https://www.youtube.com/watch?v=example-n8n-tutorial",
+      "title": "n8n 自动化工作流实战教程：从零搭建 AI Agent 工作流",
+      "description": "YouTube 视频教程，手把手教你使用 n8n 搭建 AI Agent 自动化工作流。从安装开始，到创建第一个 workflow，再到集成 LLM 节点，最终构建完整的 AI Agent 管线。",
+      "content": "今天我们来一步步搭建一个 AI Agent 工作流。第一步：安装 n8n... 第二步：创建第一个 workflow... 第三步：添加 HTTP Webhook 触发器... 第四步：集成 OpenAI 节点... 第五步：添加 Code 节点处理逻辑... 最后测试运行... 完整代码在 GitHub...",
+      "source_type": "video"
+    },
+    "experience_blog": {
+      "url": "https://example.com/blog/postgresql-scaling-lessons",
+      "title": "How We Scaled PostgreSQL to 1M QPS — Lessons Learned",
+      "description": "团队博客分享在生产环境中将 PostgreSQL 扩展到 100万 QPS 的真实经验和踩坑记录。包含连接池配置、索引优化、分区策略等实操经验。",
+      "content": "Last year our team faced a challenge: scale PostgreSQL from 10K to 1M QPS. Here's what we learned... Mistake #1: Default connection pooling settings are terrible for high concurrency. We switched to PgBouncer in transaction mode... Mistake #2: Missing indexes on JSONB columns cost us 10x query time... The counterintuitive lesson: sometimes adding more replicas makes things worse due to replication lag...",
+      "source_type": "article"
+    },
+    "unknown_source": {
+      "url": "",
+      "title": "",
+      "description": "",
+      "content": "",
+      "source_type": ""
+    },
+    "ai_agent_framework": {
+      "url": "https://github.com/crewAIInc/crewAI",
+      "title": "crewAI - Framework for orchestrating role-playing AI agents",
+      "description": "crewAI 是一个 AI Agent 编排框架，支持角色扮演、任务委派和工具集成。核心概念：Agent、Task、Crew、Tool。通过定义 Agent 的角色和目标，自动协调多 Agent 协作。",
+      "content": "crewAI is a cutting-edge framework for orchestrating autonomous AI agents. Key features: Role-based agent design, Inter-agent delegation, Flexible task management, Integration with LangChain tools. Architecture: Each agent has a role, goal, and backstory. Tasks are assigned to agents. Crews manage the execution flow...",
+      "source_type": "repo"
+    },
+    "mcp_spec_standard": {
+      "url": "https://spec.modelcontextprotocol.io/specification/2024-11-05/",
+      "title": "Model Context Protocol Specification",
+      "description": "MCP 协议官方规范文档。定义了客户端-服务器架构、JSON-RPC 消息格式、传输层、工具发现和调用机制等核心规范。",
+      "content": "The Model Context Protocol (MCP) is an open protocol that standardizes how applications provide context to LLMs. This specification defines: JSON-RPC 2.0 message format, Client-Server architecture, Transport layer (stdio/SSE), Tool discovery and invocation, Resource templates, Prompt templates... Protocol version: 2024-11-05, Status: Draft...",
+      "source_type": "url"
+    },
+    "tool_review_blog": {
+      "url": "https://example.com/blog/comparing-api-gateways-2024",
+      "title": "2024 API Gateway 横评：Kong vs Traefik vs APISIX vs Envoy",
+      "description": "技术博客对新晋 API 网关进行系统性评测和对比。从性能、功能、易用性、社区生态等维度对比 4 个主流 API 网关。",
+      "content": "We benchmarked 4 popular API gateways in 2024: Kong, Traefik, APISIX, and Envoy. Test methodology: 10K concurrent connections, mixed HTTP/gRPC traffic... Results: APISIX leads in raw throughput... Kong has the richest plugin ecosystem... Traefik is the easiest to configure... Envoy is the most flexible but complex... Recommendation: For startups → Traefik, for enterprise → Kong...",
+      "source_type": "article"
+    },
+    "tech_news_release": {
+      "url": "https://openai.com/index/gpt-4o-release",
+      "title": "OpenAI 发布 GPT-4o：免费多模态大模型",
+      "description": "OpenAI 发布 GPT-4o 模型，支持文本、图像、音频多模态处理，免费向所有用户开放。速度提升 2 倍，成本降低 50%。",
+      "content": "OpenAI announced GPT-4o, our new flagship model that can reason across audio, vision, and text in real time. GPT-4o is 2x faster and 50% cheaper than GPT-4 Turbo... Available to all ChatGPT users, including free tier... API access rolling out over the coming weeks...",
+      "source_type": "url"
+    }
+  }
+}

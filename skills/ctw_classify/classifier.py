@@ -18,6 +18,11 @@ from ctw_types import (
 from ctw_config import CTWConfig
 from ctw_classify.decision_tree import DecisionTree
 
+try:
+    from ctw_llm import get_client as _get_llm_client
+except ImportError:
+    _get_llm_client = None
+
 
 # ── 默认深度级别映射 ──────────────────────────────────────
 # 每种内容类型的建议处理深度（来自 types.yaml 的 default_infolevel）
@@ -127,25 +132,120 @@ class TaxonomyClassifier:
     def classify_with_llm(self, source: SourceInput) -> Optional[ClassifyResult]:
         """使用 LLM 对信息源进行语义分类。
 
-        当决策树分类置信度 < 0.8 时调用。使用类型的 distinguishing_question
-        进行语义判断。
-
-        注意：当前为 stub 实现。在实际部署中，此处会调用 LLM API。
+        当决策树分类置信度 < 0.8 时调用。构建包含所有类型定义和
+        distinguishing_question 的 prompt，让 LLM 选择最匹配的类型。
 
         Args:
             source: 信息源输入
 
         Returns:
-            ClassifyResult 或 None（LLM 不可用时返回 None）
+            ClassifyResult 或 None（LLM 不可用时回退到决策树结果）
         """
         self._ensure_loaded()
 
-        # 简化实现：尝试用决策树的结果加一个提示性的理由
-        # 实际部署中会调用 LLM API 使用 distinguishing_question 进行判断
+        # Empty source — don't waste an LLM call
+        if not source.title and not source.description and not source.content:
+            return self._llm_fallback(source)
+
+        if _get_llm_client is None:
+            return self._llm_fallback(source)
+
+        # Build prompt with content types
+        types_desc = self._build_llm_classification_prompt()
+        content_text = f"""URL: {source.url}
+Title: {source.title or 'N/A'}
+Description: {source.description or 'N/A'}
+Content: {(source.content or '')[:2000]}
+Source Type: {source.source_type or 'unknown'}"""
+
+        prompt = f"""{types_desc}
+
+---
+CONTENT TO CLASSIFY:
+{content_text}
+
+---
+Reply with ONLY the type identifier (e.g. "tool-extension") on a single line.
+Then on the next line, provide a confidence score between 0.0 and 1.0.
+Then on the next line, a one-sentence reason in Chinese."""
+
+        try:
+            client = _get_llm_client()
+            response = client.chat(
+                [{"role": "user", "content": prompt}],
+                temperature=0.1, max_tokens=128, timeout=30,
+            )
+            return self._parse_llm_response(response)
+        except Exception:
+            return self._llm_fallback(source)
+
+    def _build_llm_classification_prompt(self) -> str:
+        """Build the classification prompt listing all content types."""
+        lines = ["You are a content type classifier. Classify content into "
+                 "EXACTLY ONE of the following types:\n"]
+        for ct in ContentType:
+            if ct == ContentType.UNKNOWN:
+                continue
+            type_info = self._types.get(ct.value, {})
+            name = type_info.get("name", ct.value)
+            desc = type_info.get("description", "")
+            questions = type_info.get("distinguishing_question", [])
+            q_text = ""
+            if questions:
+                if isinstance(questions, list):
+                    q_text = " | ".join(questions)
+                else:
+                    q_text = str(questions)
+            lines.append(f"- **{ct.value}** ({name}): {desc}")
+            if q_text:
+                lines.append(f"  Distinguishing: {q_text}")
+        return "\n".join(lines)
+
+    def _parse_llm_response(self, response: str) -> Optional[ClassifyResult]:
+        """Parse LLM classification response into ClassifyResult."""
+        if not response:
+            return None
+
+        lines = [l.strip() for l in response.strip().split("\n") if l.strip()]
+        if not lines:
+            return None
+
+        type_id = lines[0].lower().strip()
+        confidence = 0.7
+        reason = "LLM 语义分类"
+
+        if len(lines) >= 2:
+            try:
+                confidence = float(lines[1])
+            except ValueError:
+                reason = lines[1]
+        if len(lines) >= 3:
+            reason = lines[2]
+
+        try:
+            content_type = ContentType(type_id)
+        except ValueError:
+            return None
+
+        type_info = self._types.get(content_type.value, {})
+        type_name = type_info.get("name", content_type.value)
+        suggested_level = DEFAULT_INFOLEVEL_MAP.get(content_type, InfoLevel.L1)
+
+        return ClassifyResult(
+            content_type=content_type,
+            content_type_name=type_name,
+            confidence=min(max(confidence, 0.0), 1.0),
+            reason=f"LLM 语义分类：{reason}",
+            suggested_level=suggested_level,
+            value_questions=self.get_value_questions(content_type),
+            output_targets=type_info.get("output_targets", {}),
+        )
+
+    def _llm_fallback(self, source: SourceInput) -> Optional[ClassifyResult]:
+        """Fallback when LLM is unavailable — use decision tree with slight boost."""
         content_type, confidence = self.decision_tree.classify_with_confidence(source)
 
         if content_type == ContentType.UNKNOWN and confidence == 0.0:
-            # 决策树完全无法匹配，LLM 也不可用 → 返回 UNKNOWN
             return ClassifyResult(
                 content_type=ContentType.UNKNOWN,
                 content_type_name="未知",
@@ -156,7 +256,6 @@ class TaxonomyClassifier:
                 output_targets={},
             )
 
-        # 返回决策树的结果，标记为 LLM 辅助
         type_info = self._types.get(content_type.value, {})
         type_name = type_info.get("name", content_type.value)
         suggested_level = DEFAULT_INFOLEVEL_MAP.get(content_type, InfoLevel.L1)
@@ -164,8 +263,8 @@ class TaxonomyClassifier:
         return ClassifyResult(
             content_type=content_type,
             content_type_name=type_name,
-            confidence=min(confidence + 0.05, 0.95),  # LLM 略微提升置信度
-            reason=f"LLM 辅助分类：{self._build_reason(content_type, confidence, type_name)}",
+            confidence=min(confidence + 0.05, 0.95),
+            reason=f"LLM 辅助分类（回退决策树）：{self._build_reason(content_type, confidence, type_name)}",
             suggested_level=suggested_level,
             value_questions=self.get_value_questions(content_type),
             output_targets=type_info.get("output_targets", {}),

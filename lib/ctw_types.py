@@ -3,6 +3,7 @@
 CTW Pipeline 中使用的所有类型定义和数据结构。
 与 contextToWhatend/taxonomy/types.yaml 保持同步。
 """
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -130,17 +131,55 @@ class IngestResult:
     human_feedback_required: bool = False
 
 
+def _make_timestamp_id() -> str:
+    """Generate a YYYYMMDDHHmmss timestamp ID."""
+    return time.strftime("%Y%m%d%H%M%S")
+
+
 @dataclass
 class ZkCandidate:
     """ZK 永久笔记候选"""
-    id: str
     title: str
     abstract: str
+    id: str = field(default_factory=_make_timestamp_id)
     confidence: float = 0.0
     priority: int = 3  # 1-5, 1=最高
     links: list[str] = field(default_factory=list)
     merge_target: Optional[str] = None  # 如果需要合并到已有笔记
     status: str = "pending"
+
+
+@dataclass
+class WorkflowDeviation:
+    """记录人类的每次覆盖操作 — 流程偏离"""
+    axis: str = ""            # type | depth | scope | output_selection | cancellation
+    original_value: str = ""
+    new_value: str = ""
+    reason: str = ""
+    source: str = ""          # "human" | "learned"
+    timestamp: str = field(default_factory=_make_timestamp_id)
+    run_id: str = ""
+
+
+@dataclass
+class ProcessingPlan:
+    """两阶段处理计划 — Assessment + ExecutionSteps"""
+    # Assessment fields
+    content_type_name: str = ""
+    content_type: str = ""
+    confidence: float = 0.0
+    recommended_depth: str = ""
+    level_name: str = ""
+    source_type: str = ""
+    direction_summary: str = ""
+    direction_reason: str = ""
+    value_questions: list[str] = field(default_factory=list)
+
+    # Execution steps
+    execution_steps: list[dict] = field(default_factory=list)
+    expected_outputs: dict = field(default_factory=dict)
+    deviations: list[WorkflowDeviation] = field(default_factory=list)
+    status: str = "proposed"  # proposed | approved | in_progress | complete | cancelled
 
 
 @dataclass
@@ -155,4 +194,4 @@ class PipelineResult:
     output_files: list[str] = field(default_factory=list)   # 计划产出的路径
     written_files: list[str] = field(default_factory=list)  # 实际已写入的路径
     errors: list[str] = field(default_factory=list)
-    status: str = "init"  # init / processing / waiting_human / complete / error
+    status: str = "init"  # init / proposed / approved / in_progress / complete / cancelled / error

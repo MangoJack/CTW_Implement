@@ -20,8 +20,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-# Bootstrap paths
-_CTW_ROOT = r"D:\MainWorkSpace\CTW_Implement"
+# Bootstrap paths — auto-detect project root relative to this file
+_CTW_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 for p in [
     _CTW_ROOT,
     os.path.join(_CTW_ROOT, "lib"),
@@ -34,6 +34,7 @@ for p in [
     if p not in sys.path:
         sys.path.insert(0, p)
 
+from ctw_state import RunStore
 from ctw_types import (
     SourceInput, ClassifyResult, ContentType, InfoLevel,
     LevelResult, PipelineResult, GateTrigger, GateStatus, GateName,
@@ -42,6 +43,15 @@ from ctw_types import (
 from classifier import TaxonomyClassifier
 from router import InfoLevelRouter
 from ingest import LLMWikiIngest
+
+# Try importing ResourceFetcher
+_RESOURCE_FETCHER_AVAILABLE = False
+try:
+    sys.path.insert(0, os.path.join(_CTW_ROOT, "skills", "ctw_fetch"))
+    from fetcher import ResourceFetcher
+    _RESOURCE_FETCHER_AVAILABLE = True
+except ImportError:
+    ResourceFetcher = None
 
 # ============================================================
 # Protocol Types
@@ -295,6 +305,429 @@ class CTWAnalyzer:
         self.classifier = TaxonomyClassifier()
         self.router = InfoLevelRouter()
         self.ingest = LLMWikiIngest()
+        # In-memory state for /status and /history (Slice 5)
+        self._runs: list[dict] = []
+        self._current_run: dict = {}
+        # Persistence + pattern analysis
+        self._store = RunStore()
+        self._patterns = None  # lazy init via _get_patterns()
+
+    def _get_patterns(self):
+        if self._patterns is None:
+            from patterns import PatternAnalyzer
+            self._patterns = PatternAnalyzer(self._store)
+        return self._patterns
+
+    def _get_fetcher(self):
+        """Lazy fetcher creation for testability."""
+        if ResourceFetcher:
+            return ResourceFetcher()
+        return None
+
+    # ============================================================
+    # Phase 1: assess() — fetch + classify + Assessment (Slice 3)
+    # ============================================================
+
+    def assess(self, prompt: str) -> dict:
+        """Fetch, classify, route and return an Assessment dict for human review.
+
+        Returns a dict with the PRD Assessment shape:
+            content_type, content_type_name, confidence,
+            recommended_depth, level_name, source_type,
+            direction_summary, direction_reason, value_questions
+        """
+        urls = extract_urls(prompt)
+        if not urls:
+            return {
+                "content_type": "", "content_type_name": "",
+                "confidence": 0.0, "recommended_depth": "",
+                "level_name": "", "source_type": "",
+                "direction_summary": "", "direction_reason": "",
+                "value_questions": [], "action_required": True,
+                "needs_more_info": True,
+            }
+
+        url = urls[0]
+        source_type = infer_source_type(url)
+
+        # Fetch with error fallback
+        source = None
+        needs_more_info = False
+        fetcher = self._get_fetcher()
+        if fetcher:
+            try:
+                source = fetcher.fetch(url)
+                if not source.title and not source.content:
+                    needs_more_info = True
+            except Exception:
+                # Try generic web page fetch as fallback
+                try:
+                    source = fetcher.fetch(url, source_type=source_type)
+                    if not source.title and not source.content:
+                        needs_more_info = True
+                except Exception:
+                    needs_more_info = True
+        else:
+            needs_more_info = True
+
+        if source is None:
+            source = SourceInput(url=url, source_type=source_type)
+            needs_more_info = True
+
+        # Classify
+        classify_result = self.classifier.classify(source)
+        source_type = source.source_type or source_type
+
+        # Route depth
+        level_result = self.router.route(classify_result)
+
+        # Direction recommendation
+        direction = self._direction_for(classify_result, level_result)
+
+        result = {
+            "content_type": classify_result.content_type.value,
+            "content_type_name": classify_result.content_type_name,
+            "confidence": classify_result.confidence,
+            "recommended_depth": level_result.level.value,
+            "level_name": level_result.level_name,
+            "source_type": source_type,
+            "direction_summary": direction["summary"],
+            "direction_reason": direction["reason"],
+            "value_questions": [
+                {"id": q.id, "question": q.question, "priority": q.priority}
+                for q in classify_result.value_questions
+            ],
+            "url": url,
+            "needs_more_info": needs_more_info,
+        }
+        return result
+
+    def _direction_for(self, classify_result, level_result) -> dict:
+        """Generate direction recommendation based on content type and depth."""
+        ct = classify_result.content_type
+        level = level_result.level
+
+        if ct == ContentType.SECURITY_RESEARCH:
+            return {"summary": "安全优先 — 立即深度处理",
+                    "reason": "安全研究需要紧急评估"}
+        elif ct == ContentType.TECH_NEWS:
+            return {"summary": "速览归档",
+                    "reason": "技术新闻时效性强，快速记录要点即可"}
+        elif level in (InfoLevel.L3, InfoLevel.L4):
+            return {"summary": "深度处理",
+                    "reason": f"内容复杂度高，建议 {level.value} 级别深入分析"}
+        elif level == InfoLevel.L2:
+            return {"summary": "标准处理",
+                    "reason": "适中的分析深度，产出实体+对比页"}
+        elif level == InfoLevel.L1:
+            return {"summary": "快速处理",
+                    "reason": "工具评测/教程类，产出摘要+ZK候选"}
+        else:
+            return {"summary": "速览",
+                    "reason": "低复杂度内容，仅记录基本信息"}
+
+    # ============================================================
+    # Phase 2: plan() — ProcessingPlan + deviations (Slice 4)
+    # ============================================================
+
+    def plan(self, assessment: dict, human_feedback: str = "") -> dict:
+        """Generate a ProcessingPlan from an Assessment and human feedback.
+
+        Records WorkflowDeviation if human overrides any parameter.
+        """
+        from ctw_types import WorkflowDeviation, ProcessingPlan
+
+        deviations = []
+        status = "approved"
+
+        # Parse human feedback
+        feedback_lower = human_feedback.strip().lower() if human_feedback else ""
+
+        # "cancel" or no human feedback → just accept
+        if not feedback_lower or feedback_lower in ("ok", "looks good", "approve", "yes", "好", "可以"):
+            pass  # No deviations
+        elif "cancel" in feedback_lower:
+            status = "cancelled"
+        else:
+            # Check for depth override: "L3", "go deeper", "change depth to L3"
+            depth_match = re.search(r"L([0-4])", feedback_lower, re.IGNORECASE)
+            if depth_match:
+                new_depth = f"L{depth_match.group(1)}"
+                if new_depth != assessment.get("recommended_depth", ""):
+                    deviations.append(WorkflowDeviation(
+                        axis="depth",
+                        original_value=assessment.get("recommended_depth", ""),
+                        new_value=new_depth,
+                        reason=human_feedback,
+                    ))
+                    assessment = {**assessment, "recommended_depth": new_depth}
+
+            # Check for type override: "type: tool-review", "this is a paper review"
+            for ct_name in ["tool-extension", "tool-review", "practice-tutorial",
+                           "architecture-analysis", "paper-review", "tech-news",
+                           "experience-share", "spec-standard", "security-research", "ai-agent"]:
+                if ct_name in feedback_lower:
+                    if ct_name != assessment.get("content_type", ""):
+                        deviations.append(WorkflowDeviation(
+                            axis="type",
+                            original_value=assessment.get("content_type", ""),
+                            new_value=ct_name,
+                            reason=human_feedback,
+                        ))
+                        assessment = {**assessment, "content_type": ct_name}
+                    break
+
+            # Check for scope override: "skip comparison"
+            if "skip comparison" in feedback_lower or "no comparison" in feedback_lower:
+                deviations.append(WorkflowDeviation(
+                    axis="scope",
+                    original_value="comparison",
+                    new_value="skip_comparison",
+                    reason=human_feedback,
+                ))
+
+        # ── Pattern analysis: auto-apply learned preferences ──
+        suggestions = {}
+        if not deviations:  # only auto-apply when human didn't already override
+            try:
+                pat = self._get_patterns()
+                suggestions = pat.get_suggestions(
+                    url=assessment.get("url", ""),
+                    content_type=assessment.get("content_type", ""),
+                    recommended_depth=assessment.get("recommended_depth", ""),
+                )
+                # Auto-apply type correction
+                if suggestions.get("type_auto_apply") and suggestions.get("type_suggestion"):
+                    new_type = suggestions["type_suggestion"]
+                    if new_type != assessment.get("content_type", ""):
+                        deviations.append(WorkflowDeviation(
+                            axis="type",
+                            original_value=assessment.get("content_type", ""),
+                            new_value=new_type,
+                            reason=f"learned: user corrects to {new_type} "
+                                   f"({suggestions['type_confidence']}x)",
+                            source="learned",
+                        ))
+                        assessment = {**assessment, "content_type": new_type}
+                # Auto-apply depth preference
+                if suggestions.get("depth_auto_apply") and suggestions.get("depth_suggestion"):
+                    new_depth = suggestions["depth_suggestion"]
+                    if new_depth != assessment.get("recommended_depth", ""):
+                        deviations.append(WorkflowDeviation(
+                            axis="depth",
+                            original_value=assessment.get("recommended_depth", ""),
+                            new_value=new_depth,
+                            reason=f"learned: user prefers {suggestions['depth_direction']} "
+                                   f"({suggestions['depth_confidence']}x)",
+                            source="learned",
+                        ))
+                        assessment = {**assessment, "recommended_depth": new_depth}
+            except Exception:
+                pass  # pattern analysis is advisory, never block
+
+        # Build execution steps
+        steps = [
+            {"step": 1, "action": "fetch", "description": f"Fetch from {assessment.get('url', 'unknown')}"},
+            {"step": 2, "action": "classify", "description": f"Classify as {assessment.get('content_type_name', 'unknown')}"},
+            {"step": 3, "action": "route", "description": f"Route to depth {assessment.get('recommended_depth', 'L1')}"},
+            {"step": 4, "action": "ingest", "description": "Generate wiki artifacts + ZK candidates"},
+        ]
+
+        # Expected output counts
+        ct = assessment.get("content_type", "")
+        expected = {"source_summary": 1, "zk_candidates": 2}
+        if ct in ("tool-extension", "tool-review", "architecture-analysis", "ai-agent", "security-research"):
+            expected["entity_pages"] = 1
+        if ct in ("architecture-analysis", "paper-review"):
+            expected["concept_pages"] = 1
+        if ct in ("tool-extension", "tool-review", "architecture-analysis", "ai-agent", "security-research"):
+            expected["comparison_pages"] = 1
+
+        # Remove skipped items
+        for d in deviations:
+            if d.axis == "scope" and d.new_value == "skip_comparison":
+                expected.pop("comparison_pages", None)
+                steps = [s for s in steps if s["action"] != "ingest"] + [
+                    {"step": 4, "action": "ingest", "description": "Generate wiki artifacts (no comparison) + ZK candidates"}
+                ]
+
+        return {
+            "content_type_name": assessment.get("content_type_name", ""),
+            "content_type": assessment.get("content_type", ""),
+            "confidence": assessment.get("confidence", 0.0),
+            "recommended_depth": assessment.get("recommended_depth", ""),
+            "level_name": assessment.get("level_name", ""),
+            "source_type": assessment.get("source_type", ""),
+            "direction_summary": assessment.get("direction_summary", ""),
+            "direction_reason": assessment.get("direction_reason", ""),
+            "value_questions": assessment.get("value_questions", []),
+            "execution_steps": steps,
+            "expected_outputs": expected,
+            "deviations": deviations,
+            "status": status,
+            "suggestions": {k: v for k, v in suggestions.items()
+                           if v and k not in ("type_auto_apply", "depth_auto_apply")},
+        }
+
+    # ============================================================
+    # Phase 3: execute() — pipeline execution + ZK approval (Slice 5)
+    # ============================================================
+
+    def execute(self, plan: dict, auto_write: bool = True,
+                zk_approvals: list = None) -> dict:
+        """Execute an approved ProcessingPlan through the full pipeline.
+
+        Args:
+            plan: ProcessingPlan dict from plan()
+            auto_write: If True, write wiki pages to artifact repo
+            zk_approvals: List of ZK candidate indices to approve (0-based),
+                          "all", "none", or list of merge targets like {"3": "existing-id"}
+
+        Returns:
+            PipelineResult dict with status, written files, ZK notes, etc.
+        """
+        run_id = time.strftime("%Y%m%d-%H%M%S")
+        self._current_run = {"run_id": run_id, "status": "in_progress",
+                             "started": time.strftime("%Y-%m-%dT%H:%M:%S")}
+
+        errors = []
+        url = plan.get("url", "")
+
+        # Fetch
+        source = None
+        fetcher = self._get_fetcher()
+        if fetcher and url:
+            try:
+                source = fetcher.fetch(url)
+            except Exception as e:
+                errors.append(f"Fetch failed: {e}")
+                source = SourceInput(url=url)
+
+        if source is None:
+            source = SourceInput(url=url)
+
+        # Classify
+        classify_result = None
+        try:
+            classify_result = self.classifier.classify(source)
+        except Exception as e:
+            errors.append(f"Classify failed: {e}")
+
+        if classify_result is None:
+            classify_result = ClassifyResult(content_type=ContentType.UNKNOWN)
+
+        # Route
+        level_result = None
+        try:
+            level_result = self.router.route(classify_result)
+        except Exception as e:
+            errors.append(f"Route failed: {e}")
+            level_result = LevelResult(level=InfoLevel.L0)
+
+        # Ingest
+        ingest_result = None
+        try:
+            ingest_result = self.ingest.ingest(source, classify_result, level_result,
+                                               auto_write=auto_write)
+        except Exception as e:
+            errors.append(f"Ingest failed: {e}")
+            ingest_result = IngestResult()
+
+        # ZK approval handling
+        written_zk = []
+        zk_candidates = []
+        if ingest_result and ingest_result.zk_candidates:
+            from ctw_types import ZkCandidate
+            for i, title in enumerate(ingest_result.zk_candidates):
+                zk = ZkCandidate(title=title, abstract=title)
+                zk_candidates.append(zk)
+
+            # Filter by approvals
+            if zk_approvals is None:
+                # No human feedback yet — all pending
+                pass
+            elif zk_approvals == "all":
+                for zk in zk_candidates:
+                    written_zk.append(zk)
+            elif zk_approvals == "none":
+                pass  # Write nothing
+            elif isinstance(zk_approvals, list):
+                for idx in zk_approvals:
+                    if isinstance(idx, int) and 0 <= idx < len(zk_candidates):
+                        written_zk.append(zk_candidates[idx])
+                    elif isinstance(idx, dict):
+                        # Merge: {"3": "existing-id"}
+                        for cif, tid in idx.items():
+                            ci = int(cif)
+                            if 0 <= ci < len(zk_candidates):
+                                zk_candidates[ci].merge_target = tid
+                                written_zk.append(zk_candidates[ci])
+
+        status = "cancelled" if plan.get("status") == "cancelled" else "complete"
+        if plan.get("status") == "cancelled":
+            from ctw_types import WorkflowDeviation
+            plan.setdefault("deviations", []).append(WorkflowDeviation(
+                axis="cancellation",
+                original_value="in_progress",
+                new_value="cancelled",
+                reason="Human cancelled during execution",
+            ))
+
+        written_files = ingest_result.written_files if ingest_result else []
+
+        _ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+        result = {
+            "run_id": run_id,
+            "timestamp": _ts,
+            "url": getattr(source, "url", "") if source else "",
+            "status": status,
+            "content_type": plan.get("content_type", ""),
+            "confidence": plan.get("confidence", 0.0),
+            "recommended_depth": plan.get("recommended_depth", ""),
+            "deviations": plan.get("deviations", []),
+            "source": source,
+            "classify": classify_result,
+            "level": level_result,
+            "ingest": ingest_result,
+            "zk_candidates": zk_candidates,
+            "written_zk": written_zk,
+            "written_files": written_files,
+            "files_written": len(written_files),
+            "errors": errors,
+        }
+
+        # Record in-memory state
+        self._current_run = {"run_id": run_id, "status": status,
+                             "type": plan.get("content_type_name", "unknown"),
+                             "date": time.strftime("%Y-%m-%d"),
+                             "errors": errors,
+                             "files_written": len(written_files)}
+        self._runs.append(self._current_run)
+
+        # Persist to disk
+        try:
+            self._store.save_run(result)
+        except Exception:
+            pass  # persistence failure is non-fatal
+
+        return result
+
+    # ---- Status and history (in-memory for MVP) ----
+
+    def status(self) -> dict:
+        """Return current processing stage and progress."""
+        return {
+            "stage": self._current_run.get("status", "idle"),
+            "run_id": self._current_run.get("run_id", ""),
+            "messages": [self._current_run.get("status", "idle")],
+            "decisions": [],
+        }
+
+    def history(self) -> list[dict]:
+        """Return list of past Processing Runs."""
+        return self._runs
+
+    # ---- Existing analyze() preserved ----
 
     def analyze(self, prompt: str, auto_run: bool = True, auto_write: bool = False) -> AnalysisResult:
         """

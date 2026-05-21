@@ -36,7 +36,7 @@ class CTWConfig:
         else:
             self.project_path = Path(os.environ.get(
                 "CTW_PROJECT_PATH",
-                "D:\\MainWorkSpace\\contextToWhatend"
+                str(Path.home() / "agents" / "ips-agent")
             ))
 
         self.types: dict = {}
@@ -168,7 +168,7 @@ class CTWConfig:
         self._loaded = True
 
     def _load_taxonomy(self) -> None:
-        path = self.project_path / "taxonomy" / "types.yaml"
+        path = self.project_path / "templates" / "taxonomy" / "types.yaml"
         if not path.exists():
             raise FileNotFoundError(f"Taxonomy config not found: {path}")
         with open(path, "r", encoding="utf-8") as f:
@@ -177,7 +177,7 @@ class CTWConfig:
         self.decision_tree = data.get("decision_tree", {})
 
     def _load_gates(self) -> None:
-        path = self.project_path / "workflows" / "gates.yaml"
+        path = self.project_path / "templates" / "workflows" / "gates.yaml"
         if path.exists():
             with open(path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f)
@@ -214,7 +214,7 @@ class CTWConfig:
         """
         repo = self.require_repository()
         if category == "zk":
-            return repo / "zk"
+            return repo / "zettelkasten" / "2-permanent"
         return repo / "wiki" / category
 
     def status_dict(self) -> dict:

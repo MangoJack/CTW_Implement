@@ -25,6 +25,12 @@ from ctw_types import (
     LevelResult, IngestResult, ZkCandidate,
 )
 from ctw_config import CTWConfig
+from ctw_templates import TemplateEngine
+
+try:
+    from ctw_llm import get_client as _get_llm_client
+except ImportError:
+    _get_llm_client = None
 
 
 # ============================================================
@@ -118,8 +124,23 @@ class LLMWikiIngest:
     写入磁盘前检查仓库是否已配置，未配置则拒绝写入。
     """
 
-    def __init__(self, config: Optional[CTWConfig] = None):
+    def __init__(self, config: Optional[CTWConfig] = None,
+                 template_engine: Optional[TemplateEngine] = None,
+                 llm_enabled: bool = True):
         self.config = config or CTWConfig()
+        self.template_engine = template_engine or TemplateEngine()
+        self.llm_enabled = llm_enabled and _get_llm_client is not None
+
+    def _llm_generate(self, system_prompt: str, user_prompt: str,
+                      max_tokens: int = 4096) -> Optional[str]:
+        """Generate content via LLM. Returns None if LLM is unavailable."""
+        if not self.llm_enabled:
+            return None
+        try:
+            client = _get_llm_client()
+            return client.generate(system_prompt, user_prompt, max_tokens=max_tokens)
+        except Exception:
+            return None
 
     def _make_path(self, category: str, filename: str, ext: str = ".md") -> str:
         """构建仓库下的绝对路径。"""
@@ -166,7 +187,7 @@ class LLMWikiIngest:
         slug = self._slug(source.title)
 
         # 1. Source summary — always generated
-        summary = self.generate_source_summary(source)
+        summary = self.generate_source_summary(source, classify_result=classify_result)
         result.source_summary = summary
         if have_repo:
             result.output_files.append(self._make_path("sources", slug))
@@ -256,7 +277,7 @@ class LLMWikiIngest:
         # Ensure directory structure
         for cat in ("sources", "entities", "concepts", "comparisons"):
             os.makedirs(repo / "wiki" / cat, exist_ok=True)
-        os.makedirs(repo / "zk", exist_ok=True)
+        os.makedirs(repo / "zettelkasten" / "2-permanent", exist_ok=True)
 
         idx = 0
 
@@ -311,34 +332,105 @@ class LLMWikiIngest:
 
     # ---- Source Summary ----
 
-    def generate_source_summary(self, source: SourceInput) -> str:
-        """生成源摘要页，带 YAML frontmatter 和 核心论点 节。"""
-        claims = source.description or "暂无摘要"
-        key_info = source.content[:300] if source.content else "无额外内容"
+    def generate_source_summary(self, source: SourceInput,
+                                 classify_result: Optional[ClassifyResult] = None) -> str:
+        """生成源摘要页，优先使用 LLM 生成分析内容，回退到模板渲染。"""
         tags = self._guess_tags(source)
+        value_questions_text = ""
+        if classify_result and classify_result.value_questions:
+            q_lines = [f"- **{q.question}** [{q.priority}]" for q in classify_result.value_questions]
+            value_questions_text = "\n".join(q_lines)
 
-        return SOURCE_SUMMARY_TEMPLATE.format(
-            url=source.url,
-            title=source.title or "Untitled",
-            source_type=source.source_type or "unknown",
-            date=time.strftime("%Y-%m-%d"),
-            claims=claims,
-            key_info=key_info,
-            tags=", ".join(tags),
+        content_type = classify_result.content_type_name if classify_result else "unknown"
+
+        # Try LLM-powered analysis
+        llm_analysis = self._llm_generate(
+            system_prompt=(
+                "You are a technical analyst writing structured markdown for a knowledge wiki. "
+                "Write in Chinese. Be concise and factual."
+            ),
+            user_prompt=(
+                f"Analyze the following content about [{source.title}]. "
+                f"Content type: {content_type}. Source type: {source.source_type}.\n\n"
+                f"URL: {source.url}\n"
+                f"Description: {source.description or 'N/A'}\n"
+                f"Content:\n{(source.content or '')[:3000]}\n\n"
+                "Write these sections in markdown:\n"
+                "## 核心论点\n"
+                "- 2-3 key claims/arguments as bullet points\n"
+                "## 摘要\n"
+                "- 2-3 paragraph summary\n"
+                "## 关键概念\n"
+                "- List 2-5 key concepts with brief definitions"
+            ),
+            max_tokens=2048,
         )
+
+        data = {
+            "title": source.title or "Untitled",
+            "source_file": source.url,
+            "source_type": source.source_type or "unknown",
+            "author": "",
+            "date_read": time.strftime("%Y-%m-%d"),
+            "claim_1": source.description or "暂无摘要",
+            "claim_2": "",
+            "claim_3": "",
+            "line_range": "",
+            "provenance_state": "extracted",
+            "confidence": str(classify_result.confidence) if classify_result else "0.7",
+        }
+
+        template = self.template_engine.read_template("source_summary")
+        rendered = self.template_engine.render(template, data)
+
+        # Inject LLM analysis or fallback content
+        if llm_analysis:
+            rendered += "\n" + llm_analysis + "\n"
+        else:
+            rendered += "\n## 摘要\n\n" + (source.description or "暂无摘要") + "\n"
+
+        # Append value questions section if present
+        if value_questions_text:
+            rendered += f"\n## 价值问题\n\n{value_questions_text}\n"
+
+        # Append ZK candidates
+        rendered += "\n## ZK 原子化候选清单\n\n"
+        for candidate in self.extract_zk_candidates(source.content or "", min_confidence=0.5):
+            rendered += f"- [ ] {candidate.title}\n"
+
+        return rendered
 
     # ---- Entity Page ----
 
     def generate_entity_page(self, name: str, data: dict) -> str:
-        """生成实体页，含 type/version/license 等必需字段。"""
-        return ENTITY_PAGE_TEMPLATE.format(
-            name=name,
-            type=data.get("type", "unknown"),
-            version=data.get("version", "unknown"),
-            license=data.get("license", "unknown"),
-            description=data.get("description", ""),
-            details=data.get("details", ""),
+        """生成实体页。LLM 生成分析内容，模板提供框架。"""
+        entity_type = data.get("type", "unknown")
+        description = data.get("description", "")
+
+        llm_content = self._llm_generate(
+            system_prompt="You are a technical analyst. Write in Chinese. Be concise.",
+            user_prompt=(
+                f"Write a knowledge base entry for the entity [{name}] "
+                f"(type: {entity_type}). "
+                f"Description: {description}\n\n"
+                "Include these sections:\n"
+                "## 概述\n- What it is, what it does\n"
+                "## 核心能力\n- 3-5 key capabilities\n"
+                "## 技术架构\n- Technical architecture highlights\n"
+                "## 使用场景\n- 2-3 use cases\n"
+                "## 相关实体\n- Link to related tools/frameworks"
+            ),
+            max_tokens=2048,
         )
+
+        template = self.template_engine.read_template("entity")
+        base = self.template_engine.render(template, {
+            "title": name,
+            "entity_type": entity_type,
+        })
+        if llm_content:
+            base += "\n" + llm_content + "\n"
+        return base
 
     # ---- Concept Pages ----
 
@@ -350,35 +442,51 @@ class LLMWikiIngest:
         return pages
 
     def generate_concept_page(self, name: str, data: dict) -> str:
-        """生成单个概念页。"""
-        return CONCEPT_PAGE_TEMPLATE.format(
-            name=name,
-            source=data.get("source", ""),
-            definition=data.get("definition", name),
-            points=data.get("points", ""),
-        )
+        """生成单个概念页，使用 TemplateEngine 渲染。"""
+        template = self.template_engine.read_template("concept")
+        return self.template_engine.render(template, {
+            "title": name,
+            "domain": data.get("source", ""),
+        })
 
     # ---- Comparison Pages ----
 
     def generate_comparison_pages(
         self, source: SourceInput, classify_result: ClassifyResult
     ) -> list[str]:
-        """生成对比页面（v2.0 含推荐节）。"""
-        title = f"{source.title} vs Alternatives"
-        items = source.title or "Unknown"
-        matrix = "| 项目 | {items} | Alt1 | Alt2 |\n|------|--------|------|------|\n".format(
-            items=items
-        )
-        recommendation = f"基于 {classify_result.content_type_name} 分析，推荐 {items}"
+        """生成对比页面。LLM 生成对比分析，模板提供框架。"""
+        title = source.title or "Unknown"
 
-        return [
-            COMPARISON_PAGE_TEMPLATE.format(
-                title=title,
-                items=items,
-                matrix=matrix,
-                recommendation=recommendation,
-            )
-        ]
+        llm_content = self._llm_generate(
+            system_prompt="You are a technical analyst. Write in Chinese. Be objective.",
+            user_prompt=(
+                f"Compare [{title}] with similar alternatives. "
+                f"Content type: {classify_result.content_type_name}. "
+                f"Description: {source.description or 'N/A'}\n"
+                f"Content: {(source.content or '')[:2000]}\n\n"
+                "Include:\n"
+                "## 对比维度\n"
+                "- Comparison dimensions table\n"
+                "## 相似点\n- Commonalities\n"
+                "## 差异点\n- Key differences\n"
+                "## 选择建议\n- When to choose what\n"
+                "## 推荐决策矩阵\n- Decision matrix table"
+            ),
+            max_tokens=2048,
+        )
+
+        template = self.template_engine.read_template("comparison")
+        rendered = self.template_engine.render(template, {
+            "A": title,
+            "B": "Alternatives",
+            "title": f"{title} vs Alternatives",
+            "scenario_1": "use case 1",
+            "scenario_2": "use case 2",
+            "scenario_3": "use case 3",
+        })
+        if llm_content:
+            rendered += "\n" + llm_content + "\n"
+        return [rendered]
 
     def should_generate_comparison(self, classify_result: ClassifyResult) -> bool:
         """判断是否需要生成对比页面。"""

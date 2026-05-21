@@ -1,9 +1,10 @@
 # CTW Implement — 模板引擎
 """
 LLM Wiki 页面模板渲染引擎。
-从 llmwiki/templates/ 加载 Jinja2 模板并根据数据渲染。
+从 llmwiki/templates/ 加载模板文件并根据数据渲染。
 """
 import os
+import re
 from pathlib import Path
 from typing import Any, Optional
 
@@ -24,9 +25,9 @@ class TemplateEngine:
         else:
             self.project_path = Path(os.environ.get(
                 "CTW_PROJECT_PATH",
-                "D:\\MainWorkSpace\\contextToWhatend"
+                str(Path.home() / "agents" / "ips-agent")
             ))
-        self.template_dir = self.project_path / "llmwiki" / "templates"
+        self.template_dir = self.project_path / "templates" / "llmwiki" / "templates"
 
     def get_template_path(self, template_name: str) -> Optional[Path]:
         """获取模板文件路径"""
@@ -43,6 +44,13 @@ class TemplateEngine:
             raise FileNotFoundError(f"Template not found: {template_name}")
         with open(path, "r", encoding="utf-8") as f:
             return f.read()
+
+    def render(self, template: str, data: dict) -> str:
+        """Replace {{var}} placeholders in template with data values."""
+        def _replace(match):
+            key = match.group(1).strip()
+            return str(data.get(key, match.group(0)))
+        return re.sub(r"\{\{(\w+)\}\}", _replace, template)
 
     def render_frontmatter(self, data: dict) -> str:
         """渲染 YAML frontmatter"""

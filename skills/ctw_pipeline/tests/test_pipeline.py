@@ -11,6 +11,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "ctw_info
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "ctw_ingest"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from pathlib import Path
+
 import pytest
 from ctw_types import (
     ContentType, InfoLevel, SourceInput, ClassifyResult,
@@ -152,8 +154,8 @@ class TestPipelineConfig:
         assert "ingest" in status
 
     def test_custom_project_path(self):
-        pipeline = CTWPipeline(project_path=r"D:\MainWorkSpace\contextToWhatend")
-        assert "contextToWhatend" in str(pipeline.config.project_path)
+        pipeline = CTWPipeline(project_path=str(Path.home() / "agents" / "ips-agent"))
+        assert "ips-agent" in str(pipeline.config.project_path)
 
 
 if __name__ == "__main__":

@@ -40,11 +40,11 @@ SourceInput → [Classify] → ClassifyResult → [Route] → LevelResult → [I
 
 ## Import System
 
-The project has no `setup.py` or `pyproject.toml`. All modules use `sys.path.insert()` to find `lib/` and sibling skill directories. The root is at `D:\MainWorkSpace\CTW_Implement`. When writing code that imports from `lib/` or other skills, follow the same `sys.path.insert()` pattern used in existing modules.
+The project has no `setup.py` or `pyproject.toml`. All modules use `sys.path.insert()` to find `lib/` and sibling skill directories. The project root is auto-detected from `__file__` (e.g., `os.path.dirname(__file__) / ".." / ".."`). When writing code that imports from `lib/` or other skills, follow the same `sys.path.insert()` pattern used in existing modules.
 
 ## Upstream Dependency
 
-This project reads taxonomy configuration from `contextToWhatend/taxonomy/types.yaml` at `D:\MainWorkSpace\contextToWhatend`. The `CTWConfig` constructor accepts a `ctw_project_path` override. The upstream project defines 10 content types with keywords, value questions, default info levels, and output targets.
+This project reads taxonomy configuration from the agent workspace (default `~/agents/ips-agent/templates/taxonomy/types.yaml`). The `CTWConfig` constructor accepts a `ctw_project_path` override. Set the `CTW_PROJECT_PATH` environment variable to point to your agent workspace. The upstream `contextToWhatend` project defines 10 content types with keywords, value questions, default info levels, and output targets.
 
 ## Known Limitations
 

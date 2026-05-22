@@ -143,7 +143,7 @@ pip install -e .
 
 #### 2.3.2 配置文件统一
 
-**现状**：`CTWConfig` 硬编码默认路径为 `D:\MainWorkSpace\contextToWhatend`。在不同机器上部署会失败。
+**现状**：`CTWConfig` 默认路径现为 `~/agents/ips-agent`（跨平台），通过 `CTW_PROJECT_PATH` 环境变量可覆盖。
 
 **建议**：优先级链：环境变量 `CTW_PROJECT_PATH` > 构造函数参数 > 相对路径自动发现。
 
@@ -216,8 +216,8 @@ CTW_Implement/
 
 ```python
 import sys
-sys.path.insert(0, r"D:\MainWorkSpace\CTW_Implement")
-sys.path.insert(0, r"D:\MainWorkSpace\CTW_Implement\skills\ctw_pipeline")
+sys.path.insert(0, r"<repo>")  # clone root
+sys.path.insert(0, r"<repo>/skills/ctw_pipeline")
 
 from pipeline import CTWPipeline, run_pipeline
 from ctw_types import SourceInput
@@ -242,11 +242,11 @@ print(f"状态: {result.status}")
 
 ```python
 import sys
-sys.path.insert(0, r"D:\MainWorkSpace\CTW_Implement")
-sys.path.insert(0, r"D:\MainWorkSpace\CTW_Implement\lib")
-sys.path.insert(0, r"D:\MainWorkSpace\CTW_Implement\skills\ctw_classify")
-sys.path.insert(0, r"D:\MainWorkSpace\CTW_Implement\skills\ctw_infolevel")
-sys.path.insert(0, r"D:\MainWorkSpace\CTW_Implement\skills\ctw_ingest")
+sys.path.insert(0, r"<repo>")  # clone root
+sys.path.insert(0, r"<repo>/lib")
+sys.path.insert(0, r"<repo>/skills/ctw_classify")
+sys.path.insert(0, r"<repo>/skills/ctw_infolevel")
+sys.path.insert(0, r"<repo>/skills/ctw_ingest")
 
 from ctw_types import SourceInput
 from classifier import TaxonomyClassifier
@@ -358,19 +358,19 @@ result = pipeline.run(
 {
   "skills": {
     "ctw_classify": {
-      "path": "D:\\MainWorkSpace\\CTW_Implement\\skills\\ctw_classify",
+      "path": "<repo>/skills/ctw_classify",
       "enabled": true
     },
     "ctw_infolevel": {
-      "path": "D:\\MainWorkSpace\\CTW_Implement\\skills\\ctw_infolevel",
+      "path": "<repo>/skills/ctw_infolevel",
       "enabled": true
     },
     "ctw_ingest": {
-      "path": "D:\\MainWorkSpace\\CTW_Implement\\skills\\ctw_ingest",
+      "path": "<repo>/skills/ctw_ingest",
       "enabled": true
     },
     "ctw_pipeline": {
-      "path": "D:\\MainWorkSpace\\CTW_Implement\\skills\\ctw_pipeline",
+      "path": "<repo>/skills/ctw_pipeline",
       "enabled": true
     }
   }
@@ -382,7 +382,7 @@ result = pipeline.run(
 ### 3.9 运行所有测试
 
 ```bash
-cd D:\MainWorkSpace\CTW_Implement
+cd CTW_Implement
 python -m pytest skills/ tests/ -v
 ```
 

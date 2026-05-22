@@ -77,14 +77,14 @@ Immediate notification → system tries self-resolution (multiple approaches, re
 
 ### Workspace
 
-**Code repo**: `D:\MainWorkSpace\CTW_Implement\` — the Python pipeline implementation.
+**Code repo**: `https://github.com/MangoJack/CTW_Implement.git` — clone to any local path. Root auto-detected from `__file__`.
 
-**Agent workspace**: `D:\agents\ips-agent\` — self-contained OpenClaw agent directory. CTW reference files (taxonomy/types.yaml, infolevel/LEVELS.md, llmwiki/SCHEMA.md, templates) are **copied into** `D:\agents\ips-agent\templates/`, not referenced in-place. This makes the agent stable and snapshot-able, independent of CTW spec changes.
+**Agent workspace**: `~/agents/ips-agent/` (default, cross-platform) or set `CTW_PROJECT_PATH` env var. CTW reference files (taxonomy/types.yaml, infolevel/LEVELS.md, llmwiki/SCHEMA.md, templates) are **copied into** `<workspace>/templates/`, not referenced in-place. This makes the agent stable and snapshot-able, independent of CTW spec changes.
 
-**Artifact repository**: `\\MilesFNas\personal_folder\ctw\ctw0520\` — where pipeline output files (wiki pages, ZK notes) are written.
+**Artifact repository**: `\\MilesFNas\personal_folder\ctw\ctw0520\` — where pipeline output files (wiki pages, ZK notes) are written. Configured via `CTW_REPO_PATH` env var or `config/settings.yaml`.
 
 ```
-D:\agents\ips-agent\
+~/agents/ips-agent/
 ├── raw/                      ← ingested source files
 ├── wiki/                     ← LLM Wiki compiled pages
 │   ├── sources/

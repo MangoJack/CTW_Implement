@@ -71,13 +71,13 @@ router.can_upgrade(InfoLevel.L1, InfoLevel.L3, ContentType.TOOL_REVIEW)  # → F
 ## Testing
 
 ```bash
-cd D:\MainWorkSpace\CTW_Implement
+cd CTW_Implement
 python -m pytest skills/ctw_infolevel/tests/ -v
 ```
 
 ## Dependencies
 
-- `ctw_types.py` from `D:\MainWorkSpace\CTW_Implement\lib\`
+- `ctw_types.py` from `lib/`
 - Python 3.10+ (uses `dataclasses`, `enum`, `typing.Optional`)
 
 ## License

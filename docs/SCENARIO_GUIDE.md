@@ -43,10 +43,10 @@ python ~/.openclaw/skills/ctw_runner.py classify \
 
 ```python
 import sys
-sys.path.insert(0, r"D:\MainWorkSpace\CTW_Implement")
-sys.path.insert(0, r"D:\MainWorkSpace\CTW_Implement\lib")
-sys.path.insert(0, r"D:\MainWorkSpace\CTW_Implement\skills")
-sys.path.insert(0, r"D:\MainWorkSpace\CTW_Implement\skills\ctw_pipeline")
+sys.path.insert(0, r"<repo>")  # clone root
+sys.path.insert(0, r"<repo>/lib")
+sys.path.insert(0, r"<repo>/skills")
+sys.path.insert(0, r"<repo>/skills/ctw_pipeline")
 
 from pipeline import run_pipeline
 
@@ -200,10 +200,10 @@ python ~/.openclaw/skills/ctw_runner.py test
 ### 方式 B：OpenClaw 对话中 Python
 ```python
 import sys
-sys.path.insert(0, r"D:\MainWorkSpace\CTW_Implement")
-sys.path.insert(0, r"D:\MainWorkSpace\CTW_Implement\lib")
-sys.path.insert(0, r"D:\MainWorkSpace\CTW_Implement\skills")
-sys.path.insert(0, r"D:\MainWorkSpace\CTW_Implement\skills\ctw_pipeline")
+sys.path.insert(0, r"<repo>")  # clone root
+sys.path.insert(0, r"<repo>/lib")
+sys.path.insert(0, r"<repo>/skills")
+sys.path.insert(0, r"<repo>/skills/ctw_pipeline")
 
 from pipeline import run_pipeline
 result = run_pipeline({"url": "...", "title": "...", "content": "..."})

@@ -3,3 +3,5 @@ __pycache__/
 .DS_Store
 state/
 _archive/
+.claude/
+reports/hermes-supervision-bv*.md

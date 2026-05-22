@@ -795,6 +795,24 @@ class CTWAnalyzer:
 
             # 3b. 执行分类
             try:
+                # Fetch content if source is empty (video/remote URLs)
+                if not source.content and not source.description:
+                    fetcher = self._get_fetcher()
+                    if fetcher:
+                        try:
+                            fetched = fetcher.fetch(source.url)
+                            if fetched.title:
+                                source.title = fetched.title
+                            if fetched.description:
+                                source.description = fetched.description
+                            if fetched.content:
+                                source.content = fetched.content
+                            source.quality_score = assess_source_quality(source)
+                            source.missing_fields = identify_missing_fields(source)
+                            source.needs_more_info = source.quality_score < 0.5
+                        except Exception:
+                            pass
+
                 si = SourceInput(
                     url=source.url,
                     title=source.title or source.url.rsplit('/', 1)[-1],

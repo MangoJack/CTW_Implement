@@ -173,7 +173,7 @@ Then on the next line, a one-sentence reason in Chinese."""
             client = _get_llm_client()
             response = client.chat(
                 [{"role": "user", "content": prompt}],
-                temperature=0.1, max_tokens=128, timeout=30,
+                temperature=0.1, max_tokens=512, timeout=60,
             )
             return self._parse_llm_response(response)
         except Exception:

@@ -72,13 +72,14 @@ class LLMClient:
                  api_key: str = None, provider: str = None):
         openclaw = _load_openclaw_config()
 
-        # Resolve model
+        # Resolve model: arg > env > openclaw.json > hardcoded fallback
         if model:
             self.model = model
         else:
             self.model = os.environ.get("CTW_LLM_MODEL", "")
         if not self.model:
-            # Default to deepseek-chat for reliable OpenAI-compatible responses.
+            self.model = openclaw.get("default_model", "")
+        if not self.model:
             self.model = "deepseek/deepseek-chat"
         # Strip provider prefix for API calls (deepseek/deepseek-v4-Pro → deepseek-v4-Pro)
         if "/" in self.model:

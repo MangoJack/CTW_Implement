@@ -1,6 +1,8 @@
 # IPS Design Notes
 
-> 2026-05-21 — grill-with-docs session output. Subject to refinement.
+> 2026-05-21 — grill-with-docs session output. Updated 2026-05-22 with v2.1 status.
+>
+> **Implementation status**: All MVP items implemented. 238 tests passing. LLM integration (DeepSeek) live. State persistence active. Pattern analysis + adaptive learning functional. First production run completed (Bilibili BV1xjLt6FE7d) with Hermes supervision.
 
 ## Resolved design decisions
 
@@ -75,10 +77,14 @@ Immediate notification → system tries self-resolution (multiple approaches, re
 
 ### Workspace
 
-`D:\agents\` — self-contained. CTW reference files (taxonomy/types.yaml, infolevel/LEVELS.md, llmwiki/SCHEMA.md, templates) are **copied into** `D:\agents\templates/`, not referenced in-place. This makes the agent stable and snapshot-able, independent of CTW spec changes.
+**Code repo**: `D:\MainWorkSpace\CTW_Implement\` — the Python pipeline implementation.
+
+**Agent workspace**: `D:\agents\ips-agent\` — self-contained OpenClaw agent directory. CTW reference files (taxonomy/types.yaml, infolevel/LEVELS.md, llmwiki/SCHEMA.md, templates) are **copied into** `D:\agents\ips-agent\templates/`, not referenced in-place. This makes the agent stable and snapshot-able, independent of CTW spec changes.
+
+**Artifact repository**: `\\MilesFNas\personal_folder\ctw\ctw0520\` — where pipeline output files (wiki pages, ZK notes) are written.
 
 ```
-D:\agents\
+D:\agents\ips-agent\
 ├── raw/                      ← ingested source files
 ├── wiki/                     ← LLM Wiki compiled pages
 │   ├── sources/
@@ -97,6 +103,70 @@ D:\agents\
 └── config.md
 ```
 
+### Pipeline stages
+
+The processing pipeline has four discrete stages:
+
+```
+[Fetch] → [Classify] → [Route] → [Ingest]
+```
+
+- **Fetch** (`ctw_fetch`): HTTP GET / API calls to retrieve remote content. Auto-detects source type from URL domain. Produces a populated `SourceInput`.
+- **Classify** (`ctw_classify`): Decision tree + LLM fallback to determine content type (10 types). Produces `ClassifyResult` with confidence, value questions, output targets.
+- **Route** (`ctw_infolevel`): Maps content type → InfoLevel depth (L0-L4). Supports manual override with per-type max bounds. Produces `LevelResult`.
+- **Ingest** (`ctw_ingest`): Generates LLM Wiki pages (source-summary, entity, concept, comparison) and ZK candidates. Writes to artifact repository. Produces `IngestResult`.
+
+### Entry point
+
+The `/ctw_analysis` Telegram command is implemented by `ctw_analyzer`. It orchestrates the two-phase interaction model (Assessment → human confirm → Execution Steps → human confirm → run pipeline). The analyzer does NOT bypass the pipeline — it wraps it with the two-phase protocol.
+
+### Assessment / Execution Steps template structure
+
+**Assessment** (Phase 1 — presented to human for direction confirmation):
+
+```
+📋 Assessment — <title-or-url>
+
+Content type: <type-name> (confidence: XX%)
+Recommended depth: LX — <level-name>
+Source type: <article/repo/video/pdf/tool/model>
+
+What this is: <one-paragraph summary of what the system thinks this input is>
+
+Direction: <recommended approach — go deep / quick scan / skip>
+Why: <one-sentence reasoning>
+
+Key questions this input raises:
+  • <value question 1>
+  • <value question 2>
+
+❓ Confirm direction or suggest changes.
+```
+
+**Execution Steps** (Phase 2 — presented after Assessment is confirmed):
+
+```
+📝 Processing Plan — <title>
+
+Steps:
+  1. Fetch content from <url> (<fetch strategy>)
+  2. Classify → <type-name> (decision tree + LLM)
+  3. Route to depth <LX> — <level-name>
+  4. Ingest → generate:
+     • Source summary page
+     • <N> entity page(s)
+     • <N> concept page(s)
+     • <N> comparison page(s)
+     • ~<N> ZK candidates
+
+Expected outputs: <N> files to wiki/ + zettelkasten/
+
+Any deviations from defaults: <none / list of overrides>
+Workflow Deviation recorded: <yes if human changed type/depth/scope>
+
+❓ Approve plan or suggest changes.
+```
+
 ## MVP scope (v0)
 
 1. Telegram bot receives a URL
@@ -110,7 +180,4 @@ Deferred to post-MVP: multi-URL orchestration, Reports, workflow insights, failu
 
 ## Unresolved
 
-- Web dashboard tech stack (framework, server)
-- Input source type auto-detection rules
-- Processing Plan / Assessment template structure
-- How CTW reference files (taxonomy/types.yaml, infolevel templates) are loaded — copied into D:\agents or referenced in-place from contextToWhatend
+- Web dashboard tech stack (framework, server) — post-MVP

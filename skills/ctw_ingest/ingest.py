@@ -155,6 +155,19 @@ class LLMWikiIngest:
         slug = re.sub(r"-{2,}", "-", slug)
         return slug[:80].strip("-").lower()
 
+    def _extract_author(self, source: SourceInput) -> str:
+        """Extract author from source metadata."""
+        content = source.content or ""
+        # Bilibili/YouTube: look for UP/author metadata
+        m = re.search(r"(?:UP[主\s]|作者|Author|channel)[：:\s]*([^\n]{2,40})", content)
+        if m:
+            return m.group(1).strip()
+        # GitHub: extract owner from URL
+        m = re.search(r"github\.com/([^/]+)", source.url)
+        if m:
+            return m.group(1)
+        return source.title.split(" - ")[0].split(" | ")[0][:40] if source.title else ""
+
     def ingest(
         self,
         source: SourceInput,
@@ -234,6 +247,8 @@ class LLMWikiIngest:
             zk_raw = self.extract_zk_candidates(source.content, min_confidence=0.6)
             result.zk_candidates = [z.title for z in zk_raw]
             if have_repo and zk_raw:
+                # Store full objects for write_outputs to use
+                result._zk_objects = zk_raw
                 for zk in zk_raw:
                     zk_path = self._make_path("zk", zk.id)
                     result.output_files.append(zk_path)
@@ -312,11 +327,25 @@ class LLMWikiIngest:
                 written.append(p)
                 idx += 1
 
-        # ZK notes
-        for zk_title in result.zk_candidates:
+        # ZK notes — use full candidate data if available
+        zk_objects = getattr(result, '_zk_objects', None) or []
+        for i, zk_title in enumerate(result.zk_candidates):
             if idx < len(result.output_files):
                 p = result.output_files[idx]
-                zk_content = f"---\ntype: zk-note\ntitle: {zk_title}\n---\n\n# {zk_title}\n"
+                zk = zk_objects[i] if i < len(zk_objects) else None
+                abstract = zk.abstract if zk else ""
+                confidence = zk.confidence if zk else 0.5
+                zk_content = (
+                    f"---\n"
+                    f"type: zk-note\n"
+                    f"title: \"{zk_title}\"\n"
+                    f"confidence: {confidence:.2f}\n"
+                    f"priority: {zk.priority if zk else 3}\n"
+                    f"status: pending\n"
+                    f"---\n\n"
+                    f"# {zk_title}\n\n"
+                    f"{abstract}\n"
+                )
                 self._write_file(p, zk_content)
                 written.append(p)
                 idx += 1
@@ -334,14 +363,39 @@ class LLMWikiIngest:
 
     def generate_source_summary(self, source: SourceInput,
                                  classify_result: Optional[ClassifyResult] = None) -> str:
-        """生成源摘要页，优先使用 LLM 生成分析内容，回退到模板渲染。"""
-        tags = self._guess_tags(source)
-        value_questions_text = ""
-        if classify_result and classify_result.value_questions:
-            q_lines = [f"- **{q.question}** [{q.priority}]" for q in classify_result.value_questions]
-            value_questions_text = "\n".join(q_lines)
-
+        """Generate a source summary page with populated frontmatter and LLM analysis."""
         content_type = classify_result.content_type_name if classify_result else "unknown"
+        author = self._extract_author(source)
+        date_now = time.strftime("%Y-%m-%d")
+        confidence = str(classify_result.confidence) if classify_result else "0.7"
+
+        # Build frontmatter with all fields populated
+        fm = self.template_engine.render_frontmatter({
+            "type": "source-summary",
+            "title": source.title or "Untitled",
+            "source_file": source.url,
+            "source_type": source.source_type or "unknown",
+            "author": author,
+            "date_read": date_now,
+            "created": date_now,
+            "updated": date_now,
+            "sources": [source.url] if source.url else [],
+            "status": "draft",
+            "tags": self._guess_tags(source),
+            "key_entities": [],
+            "key_concepts": [],
+            "provenance_state": "extracted",
+            "confidence": confidence,
+            "contradicted_by": [],
+            "review_status": "pending",
+            "template_version": "1.1",
+        })
+
+        # Body header
+        body = f"# {source.title or 'Untitled'}\n\n"
+        body += f"> 来源：`{source.url}` | 类型：{source.source_type or 'unknown'}"
+        body += f" | 作者：{author}" if author else ""
+        body += f" | 阅读日期：{date_now}\n\n"
 
         # Try LLM-powered analysis
         llm_analysis = self._llm_generate(
@@ -366,46 +420,54 @@ class LLMWikiIngest:
             max_tokens=2048,
         )
 
-        data = {
-            "title": source.title or "Untitled",
-            "source_file": source.url,
-            "source_type": source.source_type or "unknown",
-            "author": "",
-            "date_read": time.strftime("%Y-%m-%d"),
-            "claim_1": source.description or "暂无摘要",
-            "claim_2": "",
-            "claim_3": "",
-            "line_range": "",
-            "provenance_state": "extracted",
-            "confidence": str(classify_result.confidence) if classify_result else "0.7",
-        }
-
-        template = self.template_engine.read_template("source_summary")
-        rendered = self.template_engine.render(template, data)
-
-        # Inject LLM analysis or fallback content
         if llm_analysis:
-            rendered += "\n" + llm_analysis + "\n"
+            body += llm_analysis + "\n"
         else:
-            rendered += "\n## 摘要\n\n" + (source.description or "暂无摘要") + "\n"
+            body += "## 核心论点\n\n1. " + (source.description or "暂无摘要") + "\n\n"
+            body += "## 摘要\n\n" + (source.description or "暂无摘要") + "\n\n"
 
-        # Append value questions section if present
-        if value_questions_text:
-            rendered += f"\n## 价值问题\n\n{value_questions_text}\n"
+        # Value questions
+        if classify_result and classify_result.value_questions:
+            body += "## 价值问题\n\n"
+            for q in classify_result.value_questions:
+                body += f"- **{q.question}** [{q.priority}]\n"
+            body += "\n"
 
-        # Append ZK candidates
-        rendered += "\n## ZK 原子化候选清单\n\n"
-        for candidate in self.extract_zk_candidates(source.content or "", min_confidence=0.5):
-            rendered += f"- [ ] {candidate.title}\n"
+        # Worth digging deeper
+        body += "## 值得深入的点\n\n"
+        # ZK candidates section
+        candidates = self.extract_zk_candidates(source.content or "", min_confidence=0.5)
+        for candidate in candidates:
+            body += f"- [ ] {candidate.title}\n"
+        if not candidates:
+            body += "- [ ] \n"
 
-        return rendered
+        body += "\n## 与我现有知识的联系\n\n\n## 矛盾/冲突\n\n"
+
+        return fm + body
 
     # ---- Entity Page ----
 
     def generate_entity_page(self, name: str, data: dict) -> str:
-        """生成实体页。LLM 生成分析内容，模板提供框架。"""
+        """Generate an entity page with populated frontmatter and LLM analysis."""
         entity_type = data.get("type", "unknown")
         description = data.get("description", "")
+        date_now = time.strftime("%Y-%m-%d")
+
+        fm = self.template_engine.render_frontmatter({
+            "type": "entity",
+            "entity_type": entity_type,
+            "title": name,
+            "created": date_now,
+            "updated": date_now,
+            "sources": [],
+            "status": "draft",
+            "tags": [],
+            "related_entities": [],
+        })
+
+        body = f"# {name}\n\n"
+        body += f"> 类型：{entity_type}\n\n"
 
         llm_content = self._llm_generate(
             system_prompt="You are a technical analyst. Write in Chinese. Be concise.",
@@ -423,14 +485,12 @@ class LLMWikiIngest:
             max_tokens=2048,
         )
 
-        template = self.template_engine.read_template("entity")
-        base = self.template_engine.render(template, {
-            "title": name,
-            "entity_type": entity_type,
-        })
         if llm_content:
-            base += "\n" + llm_content + "\n"
-        return base
+            body += llm_content + "\n"
+        else:
+            body += "## 概述\n\n" + description + "\n\n"
+
+        return fm + body
 
     # ---- Concept Pages ----
 
@@ -442,31 +502,70 @@ class LLMWikiIngest:
         return pages
 
     def generate_concept_page(self, name: str, data: dict) -> str:
-        """生成单个概念页，使用 TemplateEngine 渲染。"""
-        template = self.template_engine.read_template("concept")
-        return self.template_engine.render(template, {
+        """Generate a concept page with populated frontmatter."""
+        date_now = time.strftime("%Y-%m-%d")
+        fm = self.template_engine.render_frontmatter({
+            "type": "concept",
             "title": name,
             "domain": data.get("source", ""),
+            "created": date_now,
+            "updated": date_now,
+            "sources": [],
+            "status": "draft",
+            "tags": [],
+            "related_concepts": [],
         })
+
+        body = f"# {name}\n\n"
+        body += "## 一句话定义\n\n\n"
+        body += "## 详细说明\n\n" + data.get("definition", "") + "\n\n"
+        body += "## 关键要点\n\n- " + data.get("points", "") + "\n\n"
+        body += "## 来源\n\n"
+        body += "| 源 | 提取方式 | 关键引文 |\n|----|---------|----------|\n| | extracted | |\n\n"
+        body += "## Zettelkasten 原子化候选\n\n- [ ] \n"
+
+        return fm + body
 
     # ---- Comparison Pages ----
 
     def generate_comparison_pages(
         self, source: SourceInput, classify_result: ClassifyResult
     ) -> list[str]:
-        """生成对比页面。LLM 生成对比分析，模板提供框架。"""
+        """Generate comparison pages with populated frontmatter and LLM analysis."""
         title = source.title or "Unknown"
+        date_now = time.strftime("%Y-%m-%d")
+
+        # Derive meaningful comparison names and scenarios from content
+        alt_name = self._infer_alternative(title, source)
+        scenarios = self._infer_scenarios(title, source)
+
+        fm = self.template_engine.render_frontmatter({
+            "type": "comparison",
+            "title": f"{title} vs {alt_name}",
+            "created": date_now,
+            "updated": date_now,
+            "sources": [source.url] if source.url else [],
+            "status": "draft",
+            "tags": [classify_result.content_type_name],
+            "compared_entities": [title, alt_name],
+            "recommendation": "",
+            "recommended_for": [],
+            "not_recommended_for": [],
+        })
+
+        body = f"# {title} vs {alt_name}\n\n"
+        body += "## 对比维度\n\n"
+        body += f"| 维度 | {title} | {alt_name} |\n"
+        body += "|------|-------|-------|\n| | | |\n\n"
 
         llm_content = self._llm_generate(
             system_prompt="You are a technical analyst. Write in Chinese. Be objective.",
             user_prompt=(
-                f"Compare [{title}] with similar alternatives. "
+                f"Compare [{title}] with similar alternatives (like {alt_name}). "
                 f"Content type: {classify_result.content_type_name}. "
                 f"Description: {source.description or 'N/A'}\n"
                 f"Content: {(source.content or '')[:2000]}\n\n"
                 "Include:\n"
-                "## 对比维度\n"
-                "- Comparison dimensions table\n"
                 "## 相似点\n- Commonalities\n"
                 "## 差异点\n- Key differences\n"
                 "## 选择建议\n- When to choose what\n"
@@ -475,18 +574,59 @@ class LLMWikiIngest:
             max_tokens=2048,
         )
 
-        template = self.template_engine.read_template("comparison")
-        rendered = self.template_engine.render(template, {
-            "A": title,
-            "B": "Alternatives",
-            "title": f"{title} vs Alternatives",
-            "scenario_1": "use case 1",
-            "scenario_2": "use case 2",
-            "scenario_3": "use case 3",
-        })
         if llm_content:
-            rendered += "\n" + llm_content + "\n"
-        return [rendered]
+            body += llm_content + "\n"
+
+        # Recommendation decision matrix with meaningful scenarios
+        body += "\n## 推荐决策矩阵\n\n"
+        body += "| 你的场景 | 推荐 | 理由 |\n|----------|------|------|\n"
+        for s in scenarios:
+            body += f"| {s} | 待定 | |\n"
+
+        body += "\n## 行动建议\n\n- [ ] \n"
+        body += "\n## Zettelkasten 原子化候选\n\n- [ ] \n"
+
+        return [fm + body]
+
+    def _infer_alternative(self, title: str, source: SourceInput) -> str:
+        """Infer the likely alternative/comparison target."""
+        content = (source.content or "")[:2000]
+        # Try to find mentioned alternatives in content
+        known_tools = [
+            "Claude Code", "Cursor", "Copilot", "GitHub Copilot", "Windsurf",
+            "Cline", "Aider", "Codex", "Copilot Chat", "Amazon Q",
+            "Tabnine", "Codeium", "Continue", "Open Interpreter", "GPT Pilot",
+            "n8n", "Flowise", "LangChain", "AutoGPT", "AgentGPT",
+        ]
+        found = []
+        for tool in known_tools:
+            if tool.lower() in content.lower() or tool.lower() in title.lower():
+                found.append(tool)
+        if found:
+            return found[0]  # most relevant first match
+
+        # Use generic alternative based on content type
+        if "工具" in title or "tool" in title.lower():
+            return "同类工具"
+        if "模型" in title or "model" in title.lower():
+            return "同类模型"
+        return "替代方案"
+
+    def _infer_scenarios(self, title: str, source: SourceInput) -> list[str]:
+        """Infer usage scenarios from content for the decision matrix."""
+        content = (source.content or "")[:2000]
+        scenarios = []
+        # Look for scenario-like patterns
+        for pattern in [r"(?:场景|用例|适用于|适合)[：:\s]*([^\n]{5,40})",
+                        r"(?:when|if)\s+you\s+([^\n]{10,60})"]:
+            matches = re.findall(pattern, content, re.IGNORECASE)
+            for m in matches[:3]:
+                s = m.strip().rstrip(".,;，。；")
+                if len(s) > 5 and s not in scenarios:
+                    scenarios.append(s)
+        if not scenarios:
+            scenarios = ["个人开发", "团队协作", "企业级应用"]
+        return scenarios[:3]
 
     def should_generate_comparison(self, classify_result: ClassifyResult) -> bool:
         """判断是否需要生成对比页面。"""
@@ -497,6 +637,7 @@ class LLMWikiIngest:
     def extract_zk_candidates(
         self, content: str, min_confidence: float = 0.6
     ) -> list[ZkCandidate]:
+        # Note: URLs in titles are stripped to avoid mid-URL truncation
         """从内容中提取 ZK 永久笔记候选。
 
         优先解析 "## ZK Atomic Candidates" 节的 - [ ] 列表；
@@ -516,11 +657,13 @@ class LLMWikiIngest:
                 if not item:
                     continue
                 cid = "zk_" + hashlib.md5(item.encode()).hexdigest()[:8]
-                # Assign confidence based on specificity (heuristic)
                 conf = 0.7 + min(0.3, len(item) / 200.0)
+                clean_title = re.sub(r"https?://\S+", "", item).strip()
+                if not clean_title:
+                    clean_title = item[:80]
                 candidates.append(ZkCandidate(
                     id=cid,
-                    title=item[:120],
+                    title=clean_title[:120],
                     abstract=item,
                     confidence=conf,
                     priority=3,
@@ -539,9 +682,10 @@ class LLMWikiIngest:
                     continue
                 cid = "zk_" + hashlib.md5(sent.encode()).hexdigest()[:8]
                 conf = 0.5 + min(0.3, len(sent) / 200.0)
+                clean_title = re.sub(r"https?://\S+", "", sent).strip()
                 candidates.append(ZkCandidate(
                     id=cid,
-                    title=sent[:120],
+                    title=clean_title[:120],
                     abstract=sent,
                     confidence=conf,
                     priority=4,

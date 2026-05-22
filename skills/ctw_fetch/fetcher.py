@@ -329,9 +329,33 @@ def _fetch_youtube(url: str) -> SourceInput:
 
 
 def _fetch_bilibili(url: str) -> SourceInput:
-    """Fetch Bilibili video metadata from page meta tags."""
+    """Fetch Bilibili video metadata using yt-dlp (primary) or page meta tags (fallback)."""
+    # Primary: yt-dlp for reliable metadata extraction
     try:
-        html = _http_get(url)
+        import subprocess, json as _json
+        result = subprocess.run([
+            'yt-dlp', '--dump-json', '--no-download', '--no-playlist', url
+        ], capture_output=True, text=True, timeout=30)
+        if result.returncode == 0 and result.stdout.strip():
+            meta = _json.loads(result.stdout)
+            title = meta.get('title', '')
+            desc = meta.get('description', '')
+            return SourceInput(
+                url=url,
+                title=title,
+                description=desc[:500] if desc else "",
+                content=f"Title: {title}\nUploader: {meta.get('uploader', '')}\nDuration: {meta.get('duration', 0)}s\nViews: {meta.get('view_count', 0)}\nDescription: {desc[:2000] if desc else ''}",
+                source_type="video",
+            )
+    except Exception:
+        pass  # Fall through to HTTP-based fallback
+
+    # Fallback: HTTP page scrape with proper headers
+    try:
+        html = _http_get(url, headers={
+            "Referer": "https://www.bilibili.com/",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
+        })
         title_m = re.search(r'<meta\s+[^>]*name="title"\s+content="([^"]+)"', html, re.IGNORECASE)
         if not title_m:
             title_m = re.search(r"<title>(.*?)</title>", html, re.DOTALL)

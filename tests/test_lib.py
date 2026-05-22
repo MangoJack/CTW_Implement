@@ -486,6 +486,7 @@ class TestIngestTemplateWiring:
             mock_engine = MagicMock()
             mock_engine.read_template.return_value = "# {{title}}\n\n{{source_type}}"
             mock_engine.render.return_value = "Rendered content"
+            mock_engine.render_frontmatter.return_value = "---\ntype: \"source-summary\"\ntitle: \"Test\"\n---\n"
             mock_engine_cls.return_value = mock_engine
 
             ingest = LLMWikiIngest()
@@ -504,12 +505,12 @@ class TestIngestTemplateWiring:
                 LevelResult(level=InfoLevel.L2, level_name="Practice Deep-Dive"),
             )
 
-            assert mock_engine.read_template.called, (
-                "TemplateEngine.read_template should be called"
+            assert mock_engine.render_frontmatter.called, (
+                "TemplateEngine.render_frontmatter should be called"
             )
-            assert mock_engine.render.called, (
-                "TemplateEngine.render should be called"
-            )
+            # Verify output has populated frontmatter fields (not empty template defaults)
+            assert 'type: "source-summary"' in result.source_summary
+            assert 'title: "Test"' in result.source_summary
 
 
 class TestTemplateEngineAgentWorkspace:
